@@ -67,7 +67,8 @@ func ciphers(c *ztls.Conn) error {
 		logChan <- entry
 		return handshakeErr
 	}
-	cl := entry.Ciphers
+	cl := CipherList{}
+	cl.Ciphers = entry.Ciphers
 	buf := make([]byte, 1024)
 	n, _ := c.Read(buf)
 	entry.Request = string(buf[0:n])
