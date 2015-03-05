@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"time"
 
 	"github.com/zmap/zgrab/ztools/zlog"
 	"github.com/zmap/zgrab/ztools/ztls"
@@ -30,8 +32,6 @@ func (f *Flags) Validate() error {
 
 var flags Flags
 
-var logger *zlog.Logger
-
 func init() {
 	flag.StringVar(&flags.CertificateChainPath, "certificate", "", "Path to certificate chain (PEM encoded)")
 	flag.StringVar(&flags.KeyPath, "key", "", "Path to key corresponding to certificate (PEM encoded, decrypted)")
@@ -45,25 +45,35 @@ type CipherList struct {
 }
 
 type HostLogEntry struct {
-	Host    string             `json:"ip_address"`
-	Ciphers []ztls.CipherSuite `json:"ciphers"`
+	Host     string             `json:"ip_address"`
+	Time     string             `json:"time"`
+	Ciphers  []ztls.CipherSuite `json:"ciphers,omitempty"`
+	RawHello []byte             `json:"raw_hello,omitempty"`
+	Request  string             `json:"request,omitempty"`
 }
 
+var logChan chan HostLogEntry
+
 func ciphers(c *ztls.Conn) error {
-	if err := c.Handshake(); err != nil {
-		logger.Info(err.Error())
-		return err
-	}
 	defer c.Close()
-	cl := CipherList{}
-	hl := HostLogEntry{}
-	cl.Ciphers = c.ClientCiphers()
-	hl.Ciphers = cl.Ciphers
+	entry := HostLogEntry{}
+	entry.Time = time.Now().Format(time.RFC3339)
+	host, _, _ := net.SplitHostPort(c.RemoteAddr().String())
+	entry.Host = host
+	handshakeErr := c.Handshake()
+	entry.Ciphers = c.ClientCiphers()
+	entry.RawHello = c.ClientHelloRaw()
+	if handshakeErr != nil {
+		logChan <- entry
+		return handshakeErr
+	}
+	cl := entry.Ciphers
 	buf := make([]byte, 1024)
-	c.Read(buf)
+	n, _ := c.Read(buf)
+	entry.Request = string(buf[0:n])
+	logChan <- entry
 	enc, err := json.Marshal(cl)
 	if err != nil {
-		logger.Info(err.Error())
 		return err
 	}
 	length := len(enc)
@@ -87,6 +97,7 @@ func main() {
 	}
 
 	var tlsConfig ztls.Config
+	tlsConfig.SessionTicketsDisabled = true
 	tlsConfig.Certificates = []ztls.Certificate{certificate}
 	listener, err := ztls.Listen("tcp", flags.ListenAddress, &tlsConfig)
 	if err != nil {
@@ -94,15 +105,24 @@ func main() {
 	}
 
 	// Open log file
-	if flags.LogFileName == "-" {
-		logger = zlog.New(os.Stderr, "cipher-echo")
-	} else {
-		logFile, err := os.Create(flags.LogFileName)
+	logFile := os.Stderr
+	if flags.LogFileName != "-" {
+		f, err := os.Create(flags.LogFileName)
 		if err != nil {
-			zlog.Fatal(err)
+			zlog.Fatal(err.Error())
 		}
-		logger = zlog.New(logFile, "cipher-echo")
+		logFile = f
 	}
+
+	logChan = make(chan HostLogEntry, 1024)
+
+	go func() {
+		encoder := json.NewEncoder(logFile)
+		for {
+			entry := <-logChan
+			encoder.Encode(entry)
+		}
+	}()
 
 	for {
 		conn, err := listener.Accept()
@@ -113,5 +133,4 @@ func main() {
 		c := conn.(*ztls.Conn)
 		go ciphers(c)
 	}
-	return
 }
