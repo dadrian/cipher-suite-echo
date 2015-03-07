@@ -18,6 +18,7 @@ type Flags struct {
 	KeyPath              string
 	LogFileName          string
 	ListenAddress        string
+	ErrorFileName        string
 }
 
 func (f *Flags) Validate() error {
@@ -37,6 +38,7 @@ func init() {
 	flag.StringVar(&flags.KeyPath, "key", "", "Path to key corresponding to certificate (PEM encoded, decrypted)")
 	flag.StringVar(&flags.ListenAddress, "listen-address", "127.0.0.1:443", "ip:port to listen on")
 	flag.StringVar(&flags.LogFileName, "log-file", "-", "defaults to stderr")
+	flag.StringVar(&flags.ErrorFileName, "error-file", "errors.log", "Logs connection-level errors")
 	flag.Parse()
 }
 
@@ -108,10 +110,17 @@ func main() {
 		zlog.Fatal(err.Error())
 	}
 
+	// Open errors file
+	errorFile, oErr := os.OpenFile(flags.ErrorFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if oErr != nil {
+		zlog.Fatal(oErr.Error())
+	}
+	errorLog := zlog.New(errorFile, "cipher-suite-echo")
+
 	// Open log file
 	logFile := os.Stderr
 	if flags.LogFileName != "-" {
-		f, err := os.Create(flags.LogFileName)
+		f, err := os.OpenFile(flags.LogFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 		if err != nil {
 			zlog.Fatal(err.Error())
 		}
@@ -131,7 +140,7 @@ func main() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			zlog.Info(err.Error())
+			errorLog.Error(err.Error())
 			continue
 		}
 		c := conn.(*ztls.Conn)
