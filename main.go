@@ -56,8 +56,11 @@ var logChan chan HostLogEntry
 
 func ciphers(c *ztls.Conn) error {
 	defer c.Close()
+	t := time.Now()
+	deadline := t.Add(time.Second * 30)
+	c.SetDeadline(deadline)
 	entry := HostLogEntry{}
-	entry.Time = time.Now().Format(time.RFC3339)
+	entry.Time = t.Format(time.RFC3339)
 	host, _, _ := net.SplitHostPort(c.RemoteAddr().String())
 	entry.Host = host
 	handshakeErr := c.Handshake()
